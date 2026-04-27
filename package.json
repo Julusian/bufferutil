@@ -11,11 +11,9 @@
     "test": "mocha"
   },
   "files": [
-    "binding.gyp",
     "binding-options.js",
     "fallback.js",
     "index.js",
-    "src/",
     "prebuilds/"
   ],
   "repository": {
@@ -32,7 +30,7 @@
   },
   "homepage": "https://github.com/Julusian/bufferutil",
   "dependencies": {
-    "@julusian/pkg-prebuilds": "^1.0.0"
+    "pkg-prebuilds": "^1.0.0"
   },
   "devDependencies": {
     "mocha": "^11.0.1",
