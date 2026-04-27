@@ -1,10 +1,10 @@
-"use strict";
+'use strict';
 
 try {
-  module.exports = require("@julusian/pkg-prebuilds")(
+  module.exports = require('pkg-prebuilds')(
     __dirname,
-    require("./binding-options"),
+    require('./binding-options'),
   );
 } catch (e) {
-  module.exports = require("./fallback");
+  module.exports = require('./fallback');
 }

@@ -2,9 +2,11 @@
 
 const { deepStrictEqual } = require('assert');
 const { randomBytes } = require('crypto');
-const { join } = require('path');
 
-const native = require('node-gyp-build')(join(__dirname, '..'));
+const native = require('pkg-prebuilds')(
+  require('path').join(__dirname, '..'),
+  require('../binding-options')
+);
 const fallback = require('../fallback');
 
 function use(bufferUtil) {
