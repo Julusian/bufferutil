@@ -1,5 +1,5 @@
 {
-  "name": "bufferutil",
+  "name": "@julusian/bufferutil",
   "version": "4.1.0",
   "description": "WebSocket buffer utils",
   "main": "index.js",
@@ -7,13 +7,20 @@
     "node": ">=6.14.2"
   },
   "scripts": {
-    "install": "node-gyp-build",
-    "prebuild": "prebuildify --napi --strip --target=8.11.2",
+    "build": "node-gyp rebuild",
     "test": "mocha"
   },
+  "files": [
+    "binding.gyp",
+    "binding-options.js",
+    "fallback.js",
+    "index.js",
+    "src/",
+    "prebuilds/"
+  ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/websockets/bufferutil.git"
+    "url": "git+https://github.com/Julusian/bufferutil.git"
   },
   "keywords": [
     "bufferutil"
@@ -21,15 +28,14 @@
   "author": "Einar Otto Stangvik <einaros@gmail.com> (http://2x.io)",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/websockets/bufferutil/issues"
+    "url": "https://github.com/Julusian/bufferutil/issues"
   },
-  "homepage": "https://github.com/websockets/bufferutil",
+  "homepage": "https://github.com/Julusian/bufferutil",
   "dependencies": {
-    "node-gyp-build": "^4.3.0"
+    "@julusian/pkg-prebuilds": "^1.0.0"
   },
   "devDependencies": {
     "mocha": "^11.0.1",
-    "node-gyp": "^12.1.0",
-    "prebuildify": "^6.0.0"
+    "node-gyp": "^12.1.0"
   }
 }

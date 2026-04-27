@@ -1,0 +1,237 @@
+name: Build and publish
+
+on:
+  push:
+    tags:
+      - v*
+    branches-ignore:
+      - "upstream-sync/*"
+  pull_request: {}
+
+env:
+  NAPI_VERSION: 3
+  BINDING_NAME: bufferutil
+
+jobs:
+  build-and-test:
+    name: Build ${{ matrix.docker-arch || matrix.arch }} on ${{ matrix.docker-image || matrix.os }} ${{ matrix.libc }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # windows
+          - os: windows-2022
+            arch: x64
+            is-native: true
+          - os: windows-2022
+            arch: ia32
+            is-native: false
+          - os: windows-11-arm
+            arch: arm64
+            is-native: true
+          # macos
+          - os: macos-latest
+            arch: arm64
+            is-native: true
+          - os: macos-latest
+            arch: x64
+            is-native: false
+          # linux
+          - os: ubuntu-latest
+            arch: x64
+            is-native: true
+            docker-arch: linux/amd64
+            docker-image: node:22-bullseye
+          # linux-libc
+          - os: ubuntu-24.04-arm
+            arch: arm64
+            is-native: true
+            docker-arch: linux/arm64
+            docker-image: node:22-bullseye
+          # linux-musl
+          - os: ubuntu-latest
+            arch: x64
+            is-native: false
+            docker-arch: linux/amd64
+            docker-image: node:22-alpine
+            libc: musl
+          - os: ubuntu-24.04-arm
+            arch: arm64
+            is-native: false
+            docker-arch: linux/arm64
+            docker-image: node:22-alpine
+            libc: musl
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.x
+
+      - name: rebuild
+        if: ${{ !matrix.docker-arch }}
+        shell: bash
+        run: |
+          npm install
+
+          if [ -n "${{ matrix.is-native }}" ]; then
+            npm test
+          fi
+
+          npm run build -- --arch=${{ matrix.arch }}
+          npx pkg-prebuilds-copy \
+            --baseDir build/Release \
+            --source $BINDING_NAME.node \
+            --name=$BINDING_NAME \
+            --strip \
+            --napi_version=$NAPI_VERSION \
+            --arch=${{ matrix.arch }}
+        env:
+          CI: true
+          npm_config_build_from_source: true
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        if: ${{ matrix.docker-arch && env.dockerhub_username != '' }}
+        env:
+          dockerhub_username: ${{ vars.DOCKERHUB_USERNAME }}
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+        if: matrix.docker-arch
+
+      - name: Pre-fetch image
+        if: matrix.docker-arch
+        run: docker pull ${{ matrix.docker-image }} --platform=${{ matrix.docker-arch }}
+
+      - name: rebuild (in docker)
+        uses: addnab/docker-run-action@v3
+        if: matrix.docker-arch
+        with:
+          image: ${{ matrix.docker-image }}
+          options: --platform=${{ matrix.docker-arch }} -v ${{ github.workspace }}:/work -e CI=1 -e npm_config_build_from_source=1 -e NAPI_VERSION -e BINDING_NAME
+          run: |
+            if command -v apt-get &> /dev/null
+            then
+              apt-get update
+              apt-get install -y python3 make g++
+            elif command -v apk &> /dev/null
+            then
+              apk update
+              apk add python3 make g++
+            fi
+
+            cd /work
+
+            npm install
+            npm test
+            npx pkg-prebuilds-copy \
+              --baseDir build/Release \
+              --source $BINDING_NAME.node \
+              --name=$BINDING_NAME \
+              --strip \
+              --napi_version=$NAPI_VERSION \
+              --arch=${{ matrix.arch }} \
+              --libc=${{ matrix.libc }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ runner.os }}-${{ matrix.arch }}-${{ matrix.libc }}-prebuilds
+          path: prebuilds
+          retention-days: 1
+
+  bundle:
+    name: Bundle prebuilds
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: tmp
+
+      - name: Display structure of downloaded files
+        run: |
+          mkdir prebuilds
+          mv tmp/*/* prebuilds/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: all-prebuilds
+          path: prebuilds
+          retention-days: 7
+
+  publish:
+    name: Publish to npm
+    needs: bundle
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    # only run for tags
+    if: contains(github.ref, 'refs/tags/')
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Use Node.js 24.x
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+          registry-url: https://registry.npmjs.org
+
+      - name: Check release is desired
+        id: do-publish
+        run: |
+          PUBLISHED_VERSION=$(npm view --json . version 2>/dev/null | jq -r '.' || echo "0.0.0")
+          THIS_VERSION=$(node -p "require('./package.json').version")
+          # Simple bash helper to compare version numbers
+          verlte() {
+            [  "$1" = "`echo -e "$1\n$2" | sort -V | head -n1`" ]
+          }
+          verlt() {
+            [ "$1" = "$2" ] && return 1 || verlte $1 $2
+          }
+          if verlt $PUBLISHED_VERSION $THIS_VERSION
+          then
+            echo "Publishing latest"
+            echo "tag=latest" >> $GITHUB_OUTPUT
+          else
+            echo "Publishing hotfix"
+            echo "tag=hotfix" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Prepare build
+        if: ${{ steps.do-publish.outputs.tag }}
+        run: |
+          npm install
+        env:
+          CI: true
+          npm_config_build_from_source: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: all-prebuilds
+          path: prebuilds
+
+      - name: Publish to NPM
+        if: ${{ steps.do-publish.outputs.tag }}
+        run: |
+          npm publish --access=public --tag ${{ steps.do-publish.outputs.tag }} --provenance
+
+          NEW_VERSION=$(node -p "require('./package.json').version")
+          echo "**Published:** $NEW_VERSION" >> $GITHUB_STEP_SUMMARY
+        env:
+          CI: true

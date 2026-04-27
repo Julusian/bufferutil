@@ -1,0 +1,84 @@
+name: Sync from upstream
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: "Upstream tag to sync (e.g. v4.2.0). Leave blank to use the latest tag."
+        required: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream tags
+        run: |
+          git remote add upstream https://github.com/websockets/bufferutil.git
+          git fetch upstream --tags
+
+      - name: Resolve target tag
+        id: tag
+        run: |
+          if [ -n "${{ inputs.upstream_tag }}" ]; then
+            TAG="${{ inputs.upstream_tag }}"
+          else
+            TAG=$(git tag --list --sort=-version:refname | head -1)
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Check tag is not already synced
+        run: |
+          CURRENT=$(cat .upstream-version 2>/dev/null || echo "none")
+          if [ "$CURRENT" = "${{ steps.tag.outputs.tag }}" ]; then
+            echo "Already synced to ${{ steps.tag.outputs.tag }}, nothing to do."
+            exit 1
+          fi
+
+      - name: Create sync branch and merge
+        run: |
+          TAG=${{ steps.tag.outputs.tag }}
+          BRANCH="upstream-sync/$TAG"
+          git checkout -b $BRANCH
+
+          # Merge upstream tag, picking up source/gyp/etc changes
+          git merge $TAG --no-edit --no-commit || true
+
+          # Always preserve our version field in package.json
+          MY_VERSION=$(git show HEAD:package.json | jq -r '.version')
+          tmp=$(mktemp)
+          jq --arg v "$MY_VERSION" '.version = $v' package.json > "$tmp" && mv "$tmp" package.json
+
+          # Always restore our fork-specific files wholesale
+          git checkout HEAD -- index.js binding-options.js .github/
+
+          # Record the synced upstream tag
+          echo "$TAG" > .upstream-version
+
+          git add -A
+          git commit -m "chore: sync upstream $TAG"
+          git push origin $BRANCH
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Open PR
+        run: |
+          gh pr create \
+            --title "chore: sync upstream ${{ steps.tag.outputs.tag }}" \
+            --body "Automated sync from [websockets/bufferutil ${{ steps.tag.outputs.tag }}](https://github.com/websockets/bufferutil/releases/tag/${{ steps.tag.outputs.tag }})." \
+            --head "upstream-sync/${{ steps.tag.outputs.tag }}" \
+            --base master
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
